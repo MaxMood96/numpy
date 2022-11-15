@@ -11,3 +11,4 @@ breathe
 
 # needed to build release notes
 towncrier
+setuptools>=65.5.1 # not directly required, pinned by Snyk to avoid a vulnerability
