@@ -12,3 +12,4 @@ breathe>4.33.0
 # needed to build release notes
 towncrier
 toml
+pillow>=10.0.0 # not directly required, pinned by Snyk to avoid a vulnerability
