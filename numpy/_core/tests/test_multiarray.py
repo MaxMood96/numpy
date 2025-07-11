@@ -48,11 +48,9 @@ from numpy.testing import (
     assert_equal,
     assert_raises,
     assert_raises_regex,
-    assert_warns,
     break_cycles,
     check_support_sve,
     runstring,
-    suppress_warnings,
     temppath,
 )
 from numpy.testing._private.utils import _no_tracing, requires_memory
@@ -3805,11 +3803,11 @@ class TestMethods:
             ap = complex(a)
             assert_equal(ap, a, msg)
 
-            with assert_warns(DeprecationWarning):
+            with pytest.warns(DeprecationWarning):
                 bp = complex(b)
             assert_equal(bp, b, msg)
 
-            with assert_warns(DeprecationWarning):
+            with pytest.warns(DeprecationWarning):
                 cp = complex(c)
             assert_equal(cp, c, msg)
 
@@ -3833,7 +3831,7 @@ class TestMethods:
         assert_raises(TypeError, complex, d)
 
         e = np.array(['1+1j'], 'U')
-        with assert_warns(DeprecationWarning):
+        with pytest.warns(DeprecationWarning):
             assert_raises(TypeError, complex, e)
 
 class TestCequenceMethods:
@@ -4932,9 +4930,11 @@ class TestArgmax:
     @pytest.mark.parametrize('data', nan_arr)
     def test_combinations(self, data):
         arr, pos = data
-        with suppress_warnings() as sup:
-            sup.filter(RuntimeWarning,
-                        "invalid value encountered in reduce")
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                "invalid value encountered in reduce",
+                RuntimeWarning)
             val = np.max(arr)
 
         assert_equal(np.argmax(arr), pos, err_msg=f"{arr!r}")
@@ -5074,9 +5074,11 @@ class TestArgmin:
     @pytest.mark.parametrize('data', nan_arr)
     def test_combinations(self, data):
         arr, pos = data
-        with suppress_warnings() as sup:
-            sup.filter(RuntimeWarning,
-                       "invalid value encountered in reduce")
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                "invalid value encountered in reduce",
+                RuntimeWarning)
             min_val = np.min(arr)
 
         assert_equal(np.argmin(arr), pos, err_msg=f"{arr!r}")
@@ -7268,8 +7270,8 @@ class TestMatmul(MatmulCommon):
         out = np.zeros((5, 2), dtype=np.complex128)
         c = self.matmul(a, b, out=out)
         assert_(c is out)
-        with suppress_warnings() as sup:
-            sup.filter(ComplexWarning, '')
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ComplexWarning)
             c = c.astype(tgt.dtype)
         assert_array_equal(c, tgt)
 
@@ -8816,8 +8818,9 @@ class TestArrayAttributeDeletion:
         # ticket #2046, should not seqfault, raise AttributeError
         a = np.ones(2)
         attr = ['shape', 'strides', 'data', 'dtype', 'real', 'imag', 'flat']
-        with suppress_warnings() as sup:
-            sup.filter(DeprecationWarning, "Assigning the 'data' attribute")
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore', "Assigning the 'data' attribute", DeprecationWarning)
             for s in attr:
                 assert_raises(AttributeError, delattr, a, s)
 
@@ -8870,6 +8873,8 @@ class TestArrayInterface:
         (f, {'strides': ()}, 0.5),
         (f, {'strides': (2,)}, ValueError),
         (f, {'strides': 16}, TypeError),
+        # This fails due to going into the buffer protocol path
+        (f, {'data': None, 'shape': ()}, TypeError),
         ])
     def test_scalar_interface(self, val, iface, expected):
         # Test scalar coercion within the array interface
@@ -8888,11 +8893,48 @@ class TestArrayInterface:
             post_cnt = sys.getrefcount(np.dtype('f8'))
             assert_equal(pre_cnt, post_cnt)
 
-def test_interface_no_shape():
+
+def test_interface_empty_shape():
     class ArrayLike:
         array = np.array(1)
         __array_interface__ = array.__array_interface__
     assert_equal(np.array(ArrayLike()), 1)
+
+
+def test_interface_no_shape_error():
+    class ArrayLike:
+        __array_interface__ = {"data": None, "typestr": "f8"}
+
+    with pytest.raises(ValueError, match="Missing __array_interface__ shape"):
+        np.array(ArrayLike())
+
+
+@pytest.mark.parametrize("iface", [
+    {"typestr": "f8", "shape": (0, 1)},
+    {"typestr": "(0,)f8,", "shape": (1, 3)},
+])
+def test_interface_nullptr(iface):
+    iface.update({"data": (0, True)})
+
+    class ArrayLike:
+        __array_interface__ = iface
+
+    arr = np.asarray(ArrayLike())
+    # Note, we currently set the base anyway, but we do an allocation
+    # (because NumPy doesn't like NULL data pointers everywhere).
+    assert arr.shape == iface["shape"]
+    assert arr.dtype == np.dtype(iface["typestr"])
+    assert arr.base is not None
+    assert arr.flags.owndata
+
+
+def test_interface_nullptr_size_check():
+    # Note that prior to NumPy 2.4 the below took the scalar path (if shape had size 1)
+    class ArrayLike:
+        __array_interface__ = {"data": (0, True), "typestr": "f8", "shape": ()}
+
+    with pytest.raises(ValueError, match="data is NULL but array contains data"):
+        np.array(ArrayLike())
 
 
 def test_array_interface_itemsize():
@@ -9071,9 +9113,9 @@ class TestConversion:
         int_funcs = (int, lambda x: x.__int__())
         for int_func in int_funcs:
             assert_equal(int_func(np.array(0)), 0)
-            with assert_warns(DeprecationWarning):
+            with pytest.warns(DeprecationWarning):
                 assert_equal(int_func(np.array([1])), 1)
-            with assert_warns(DeprecationWarning):
+            with pytest.warns(DeprecationWarning):
                 assert_equal(int_func(np.array([[42]])), 42)
             assert_raises(TypeError, int_func, np.array([1, 2]))
 
@@ -9087,7 +9129,7 @@ class TestConversion:
                     raise NotImplementedError
             assert_raises(NotImplementedError,
                 int_func, np.array(NotConvertible()))
-            with assert_warns(DeprecationWarning):
+            with pytest.warns(DeprecationWarning):
                 assert_raises(NotImplementedError,
                     int_func, np.array([NotConvertible()]))
 
@@ -9677,12 +9719,10 @@ class TestWritebackIfCopy:
     @pytest.mark.leaks_references(
             reason="increments self in dealloc; ignore since deprecated path.")
     def test_dealloc_warning(self):
-        with suppress_warnings() as sup:
-            sup.record(RuntimeWarning)
-            arr = np.arange(9).reshape(3, 3)
-            v = arr.T
+        arr = np.arange(9).reshape(3, 3)
+        v = arr.T
+        with pytest.warns(RuntimeWarning):
             _multiarray_tests.npy_abuse_writebackifcopy(v)
-            assert len(sup.log) == 1
 
     def test_view_discard_refcount(self):
         from numpy._core._multiarray_tests import (
@@ -10202,8 +10242,8 @@ class TestAlignment:
             xf128 = _aligned_zeros(3, np.longdouble, align=align)
 
             # test casting, both to and from misaligned
-            with suppress_warnings() as sup:
-                sup.filter(ComplexWarning, "Casting complex values")
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', "Casting complex values", ComplexWarning)
                 xc64.astype('f8')
             xf64.astype(np.complex64)
             test = xc64 + xf64
